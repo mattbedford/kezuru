@@ -33,52 +33,205 @@ Base: [samuelgfeller/slim-starter](https://github.com/samuelgfeller/slim-starter
 
 The core of Kezuru. A schema-driven content management system that auto-generates admin CRUD screens from simple PHP config files.
 
-### 1.1 Schema Definition Format
+### 1.1 Content Modelling Philosophy
 
-Define content types as PHP arrays in `config/content/`. One file per type.
+**The PDC hierarchy.** Kezuru content is organised into three levels:
+
+- **Primitives** — single fields (`text`, `image`, `toggle`, etc.)
+- **Data structures** — repeatable groups of primitives (a benefits box, a gallery item, a testimonial row)
+- **Content types** — the top-level definition containing both
+
+This is universal and non-prescriptive. A "benefits box", a "card", a "hero" — these are all just data structures. The names are yours. The engine doesn't care what you call them.
+
+**Content types, not collections.** Kezuru uses the term "content type" — simple, unambiguous, no trademark conflicts.
+
+**Schema as PHP files, stored in git.** Content type definitions live in `config/content/` as plain PHP arrays. They are the canonical source of truth. This keeps schema changes version-controlled, diffable, and deployable — avoiding the classic WordPress problem where "your database is everything and nothing is portable."
+
+**Developer names the fields; developer owns the structure.** There is no generic `body` field. There is no assumed page structure. The developer looks at the actual template and names fields to match it — `hero_heading`, `intro_text`, `section_1_image`. Named data flows into named places. No magic, no `the_content()`.
+
+**Fixed structure for MVP.** The developer defines the shape entirely. The client fills in the values. The page structure never changes at runtime. This is the right starting point.
+
+**Flexible content (page builder) is a post-MVP layer.** The architecture does not prevent it, but it is not built now. See Phase 3+.
+
+**GUI schema editor is deferred.** A browser-based tool that writes PHP schema files to disk (GUI + git-trackable) is a viable future addition. For MVP, developers edit schema files directly. If friction emerges among developer users, revisit.
+
+**The engine reads what's there; it never assumes.** The FormRenderer, ListRenderer, and all engine components read field definitions from the schema and apply sensible defaults for anything absent. This means new field-level metadata keys can be added at any time without breaking existing schemas.
+
+**Phinx is the single tool that touches the database.** The schema file is the source of truth. The CLI migration generator reads it and outputs a Phinx migration file. Phinx applies it. No competing systems, no auto-applying schema changes behind your back. Every DB change is explicit, reviewable, and git-tracked.
+
+```
+PHP schema file → php bin/kezuru generate:migration {type} → Phinx migration file → phinx migrate
+```
+
+Phinx is also used for core schema (users, settings) — anything that isn't content-type-driven.
+
+### 1.2 Schema Definition Format
+
+Define content types as PHP arrays in `config/content/`. One file per type. The array key becomes the database column name — keep it snake_case.
+
+Two canonical examples ship with Kezuru. Use them as-is, copy and adapt them, or write your own from scratch.
+
+**Example 1 — primitives only** (`config/content/team_members.php`):
 
 ```php
-// config/content/team_member.php
 return [
     'label'        => 'Team Members',
     'label_single' => 'Team Member',
-    'icon'         => 'users',
+    'icon'         => 'people',
     'fields'       => [
-        'name'       => ['type' => 'text', 'required' => true, 'label' => 'Full Name'],
-        'job_title'  => ['type' => 'text', 'label' => 'Job Title'],
-        'bio'        => ['type' => 'textarea', 'label' => 'Biography'],
-        'headshot'   => ['type' => 'image', 'label' => 'Photo'],
-        'start_date' => ['type' => 'date', 'label' => 'Start Date'],
-        'website'    => ['type' => 'url', 'label' => 'Website'],
-        'sort_order' => ['type' => 'number', 'label' => 'Sort Order'],
+        'full_name' => [
+            'type'     => 'text',
+            'label'    => 'Full Name',
+            'required' => true,
+        ],
+        'job_title' => [
+            'type'  => 'text',
+            'label' => 'Job Title',
+        ],
+        'headshot' => [
+            'type'  => 'image',
+            'label' => 'Photo',
+        ],
+        'bio' => [
+            'type'  => 'richtext',
+            'label' => 'Biography',
+        ],
+        'is_published' => [
+            'type'  => 'toggle',
+            'label' => 'Published',
+        ],
     ],
 ];
 ```
 
+**Example 2 — primitives + data structure** (`config/content/pages.php`):
+
+```php
+return [
+    'label'        => 'Pages',
+    'label_single' => 'Page',
+    'icon'         => 'document-text',
+    'fields'       => [
+
+        // Primitives
+        'hero_heading' => [
+            'type'     => 'text',
+            'label'    => 'Hero Heading',
+            'required' => true,
+        ],
+        'hero_image' => [
+            'type'  => 'image',
+            'label' => 'Hero Image',
+        ],
+        'intro_text' => [
+            'type'  => 'richtext',
+            'label' => 'Introduction',
+        ],
+
+        // Data structure — a repeatable group of primitives
+        'benefits' => [
+            'type'   => 'repeater',
+            'label'  => 'Benefits',
+            'fields' => [
+                'icon' => [
+                    'type'  => 'image',
+                    'label' => 'Icon',
+                ],
+                'headline' => [
+                    'type'     => 'text',
+                    'label'    => 'Headline',
+                    'required' => true,
+                ],
+                'body_text' => [
+                    'type'  => 'richtext',
+                    'label' => 'Body',
+                ],
+                'cta_text' => [
+                    'type'  => 'text',
+                    'label' => 'Button Label',
+                ],
+                'cta_url' => [
+                    'type'  => 'url',
+                    'label' => 'Button Link',
+                ],
+            ],
+        ],
+
+        'is_published' => [
+            'type'  => 'toggle',
+            'label' => 'Published',
+        ],
+    ],
+];
+```
+
+The template then does:
+```php
+// Primitives
+<?= $page['hero_heading'] ?>
+<?= $page['intro_text'] ?>
+
+// Data structure
+<?php foreach ($page['benefits'] as $benefit): ?>
+    <?= $benefit['headline'] ?>
+    <?= $benefit['body_text'] ?>
+    <a href="<?= $benefit['cta_url'] ?>"><?= $benefit['cta_text'] ?></a>
+<?php endforeach ?>
+```
+
+No magic. No assumed structure. Named data into named places.
+
 **MVP field types:**
 
-| Type       | Renders as              | DB column    |
-|------------|-------------------------|--------------|
-| `text`     | `<input type="text">`   | VARCHAR(255) |
-| `textarea` | `<textarea>`            | TEXT         |
-| `richtext` | Textarea + simple editor| TEXT         |
-| `number`   | `<input type="number">` | INTEGER      |
-| `date`     | `<input type="date">`   | DATE         |
-| `url`      | `<input type="url">`    | VARCHAR(500) |
-| `email`    | `<input type="email">`  | VARCHAR(254) |
-| `image`    | File upload + preview   | VARCHAR(500) |
-| `select`   | `<select>`              | VARCHAR(255) |
-| `toggle`   | Checkbox/switch         | BOOLEAN      |
+| Type       | Renders as                        | DB column                                    |
+|------------|-----------------------------------|----------------------------------------------|
+| `text`     | `<input type="text">`             | VARCHAR(255)                                 |
+| `textarea` | `<textarea>`                      | TEXT                                         |
+| `richtext` | Textarea + simple editor          | TEXT                                         |
+| `number`   | `<input type="number">`           | INTEGER                                      |
+| `date`     | `<input type="date">`             | DATE                                         |
+| `url`      | `<input type="url">`              | VARCHAR(500)                                 |
+| `email`    | `<input type="email">`            | VARCHAR(254)                                 |
+| `image`    | File upload + preview             | VARCHAR(500)                                 |
+| `select`   | `<select>`                        | VARCHAR(255)                                 |
+| `toggle`   | Checkbox/switch                   | BOOLEAN                                      |
+| `repeater` | Repeatable group of sub-fields    | No column — generates a child table instead  |
 
-### 1.2 Schema-to-Database (SchemaToTable)
+A `repeater` field named `benefits` on the `pages` content type generates a child table `content_pages_benefits` with columns for `parent_id`, `sort_order`, and one column per sub-field.
 
-- Reads content type definitions from `config/content/`
-- Compares against actual database tables
-- Creates or alters tables to match (prefix: `content_`)
-- Runs automatically on setup, can be triggered via CLI
-- Must work identically across SQLite, MariaDB, PostgreSQL
+**MVP field-level flags:**
 
-### 1.3 Schema-to-Form (FormRenderer)
+| Flag       | Type    | Purpose                                      |
+|------------|---------|----------------------------------------------|
+| `required` | bool    | Validates presence before save               |
+| `label`    | string  | Human-readable label shown in admin form     |
+
+**Deferred field-level flags (YAGNI — add when needed, non-breaking):**
+
+`is_editable`, `is_movable`, `group_id`, `group_order` — hints at future flexible content and drag-and-drop UI. Intentionally absent from MVP. Because the engine reads what's present and ignores what's absent, adding them later requires no architectural change.
+
+### 1.3 Migration Generator (SchemaToMigration)
+
+The schema file is the source of truth. The migration generator reads it and outputs a Phinx migration file. Phinx applies it. There is no system that modifies the database directly from schema — every DB change goes through an explicit, reviewable migration file.
+
+**CLI usage:**
+```bash
+php bin/kezuru generate:migration pages
+# Outputs: db/migrations/20240311120000_create_content_pages.php
+```
+
+**What it generates:**
+- A `content_{type}` table with one column per primitive field
+- A `content_{type}_{repeater_name}` child table for each `repeater` field, with `parent_id`, `sort_order`, and one column per sub-field
+- Standard `id`, `created_at`, `updated_at` columns on every table
+
+**Rules:**
+- Re-running on an existing type generates an `alter` migration, not a fresh `create`
+- The developer reviews the generated file before running `phinx migrate`
+- Generated migrations are committed to git — colleagues run `phinx migrate` on pull
+- Must produce valid migrations for SQLite, MariaDB, and PostgreSQL
+
+### 1.4 Schema-to-Form (FormRenderer)
 
 - Reads content type definition
 - Outputs correct HTML form fields per type
@@ -86,7 +239,7 @@ return [
 - FieldTypeRegistry maps type string to renderer class
 - New field types added by registering one class
 
-### 1.4 Generic Admin CRUD
+### 1.5 Generic Admin CRUD
 
 All content types share one set of actions/routes:
 
@@ -107,14 +260,14 @@ Components:
 - `ContentRepository` — generic CRUD using query builder
 - `ContentValidator` — validates input against schema rules
 
-### 1.5 File/Image Upload
+### 1.6 File/Image Upload
 
 - `ImageUploadService` handles uploads to `storage/uploads/`
 - Resize/thumbnail generation
 - Returns stored path for DB
 - Abstracted via Flysystem for future S3/CDN support (optional)
 
-### 1.6 Admin Navigation
+### 1.7 Admin Navigation
 
 - Auto-generated from content type definitions
 - Sidebar lists each content type with its icon and label
@@ -166,24 +319,24 @@ Icons are from the Ionicons set (MIT licensed), used as inline SVGs in templates
 ### Completed
 
 - [x] Admin layout shell (`templates/admin/layout.php`)
-    - CSS Grid: fixed 260px sidebar + fluid main area
-    - Main area splits into topbar (auto height) + content (fills remaining)
-    - Loads zone-specific assets via shared asset renderer
-    - Dark mode script fires before paint
+  - CSS Grid: fixed 260px sidebar + fluid main area
+  - Main area splits into topbar (auto height) + content (fills remaining)
+  - Loads zone-specific assets via shared asset renderer
+  - Dark mode script fires before paint
 - [x] Admin sidebar (`templates/admin/partials/sidebar.php`)
-    - Dark background (`bg-sidebar`), Strapi-style
-    - Brand/app name at top
-    - Icon + label navigation with active state detection via route names
-    - Nav items array ready for content collection injection
-    - Settings link anchored at bottom
+  - Dark background (`bg-sidebar`), Strapi-style
+  - Brand/app name at top
+  - Icon + label navigation with active state detection via route names
+  - Nav items array ready for content collection injection
+  - Settings link anchored at bottom
 - [x] Admin topbar (`templates/admin/partials/topbar.php`)
-    - Page title on the left (set by page template via `$pageTitle` variable)
-    - Dark/light mode toggle with sun/moon Ionicons
-    - User avatar placeholder on the right
+  - Page title on the left (set by page template via `$pageTitle` variable)
+  - Dark/light mode toggle with sun/moon Ionicons
+  - User avatar placeholder on the right
 - [x] Admin dashboard (`templates/admin/dashboard.php`)
-    - Calls `$this->setLayout('admin/layout.php')` — demonstrates the zone pattern
-    - Quick-link cards to available sections (Users)
-    - No charts, no analytics — this is a content tool, not an ERP
+  - Calls `$this->setLayout('admin/layout.php')` — demonstrates the zone pattern
+  - Quick-link cards to available sections (Users)
+  - No charts, no analytics — this is a content tool, not an ERP
 
 ### Remaining
 
